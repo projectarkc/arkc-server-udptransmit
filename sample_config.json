@@ -1,0 +1,8 @@
+{
+    "remote_host": "x.x.x.x",
+    "remote_port": "x",
+    "clients": [
+        ["loacl path of client1.pub", <sha1 of client1's private key>],
+        ["loacl path of client2.pub", <sha1 of client2's private key>]
+    ]
+}
