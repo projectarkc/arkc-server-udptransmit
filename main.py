@@ -18,8 +18,8 @@ DEFAULT_REMOTE_PORT = 8000
 
 def decode(data):
     msg=''
-    tipo = (ord(data[2]) >> 3) & 15   # Opcode bits
-    if tipo == 0:                     # Standard query
+    tipo = (ord(data[2]) >> 3) & 15  
+    if tipo == 0:                   
       ini=12
       lon=ord(data[ini])
       while lon != 0:
@@ -58,7 +58,13 @@ def decrypt_udp_msg(msg1, msg2, msg3, msg4, msg5):
         if len(recentsalt) >= MAX_SALT_BUFFER:
             recentsalt.pop(0)
         recentsalt.append(msg5)
-        return main_pw, client_sha1, number, remote_port, remote_ip
+        return recentsalt+\
+                bytes(main_pw, "UTF-8") + \
+                bytes(client_sha1, "UTF-8") + \
+                bytes(number, "UTF-8") + \
+                bytes(remote_port, "UTF-8") + \
+                bytes(remote_ip, "UTF-8")
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-c', '--config', dest="config", default='config.json')
@@ -84,10 +90,17 @@ if __name__ == "__main__":
         print (err)
         quit()
 
+    try:
+        addr=(data['remote_host'],data['remote_port'])
+    except Exception as err:
+        print ('Fatal error while loading server address!')
+        print (err)
+        quit()
     s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
     s.bind(('',53))
     while 1:
         msg,addr = s.recvfrom(2048)
         msg=decode(msg)
         query_data=msg.split('.')
-        main_pw, client_sha1, number, tcp_port, remote_ip = decrypt_udp_msg(query_data[0], query_data[1], query_data[2], query_data[3], query_data[4])
+        s.sendto(decrypt_udp_msg(query_data[0], query_data[1], query_data[2], query_data[3], query_data[4]),addr)
+
