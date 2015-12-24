@@ -29,8 +29,7 @@ For a full list of settings:
 
 | Index name            |                Value Type & Description               | Required / Default   |
 | ----------------------|:------------------------------------------------------| --------------------:|
-| remote_host           | int, main server address                              | REQUIRED             |
-| remote_port           | int, main server port                                 | REQUIRED             |
+| servers               | list, (address, port, path of pub) pairs              | REQUIRED             |
 | clients               | list, (path of client pub, sha1 of client pri) pairs  | REQUIRED             |
 
 ##Acknowledgements
