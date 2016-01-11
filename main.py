@@ -13,8 +13,8 @@ from random import  choice
 from Crypto.PublicKey import RSA
 from hashlib import sha1
 
-
-
+class CorruptedReq:
+    pass
 
 class certloader:
 
@@ -41,40 +41,39 @@ class certloader:
 
 
 def decrypt_udp_msg(msg1, msg2, msg3, msg4, msg5):
-        """Return (main_pw, client_sha1, number).
+    """Return (main_pw, client_sha1, number).
 
-            The encrypted message should be
-            (required_connection_number (HEX, 2 bytes) +
-            used_remote_listening_port (HEX, 4 bytes) +
-            sha1(cert_pub) ,
-            pyotp.TOTP(time) , ## TODO: client identity must be checked
-            main_pw,
-            ip_in_number_form,
-            salt
-            Total length is 2 + 4 + 40 = 46, 16, 16, ?, 16
-        """
-        global recentsalt, certs, MAX_SALT_BUFFER
-        assert len(msg1) == 46
-        if msg5 in recentsalt:
-            return (None, None, None, None, None)
-        number_hex, port_hex, client_sha1 = msg1[:2], msg1[2:6], msg1[6:46]
-        remote_ip = str(ipaddress.ip_address(int(msg4)))
-        h = hashlib.sha256()
-        h.update((certs[client_sha1][1] + msg4 + msg5).encode("UTF-8")) # Let's add the number_hex into the update string too, in client side and transmit side
-        assert msg2 == pyotp.TOTP(h.hexdigest()).now()
-        main_pw = binascii.unhexlify(msg3)
-        number = int(number_hex, 16)
-        remote_port = int(port_hex, 16)
-        if len(recentsalt) >= MAX_SALT_BUFFER:
-            recentsalt.pop(0)
-        recentsalt.append(msg5)
-        returnvalue=[main_pw,
-                client_sha1,
-                number,
-                remote_port,
-                remote_ip]
-        logging.info("Data decrypted, processing")
-        return returnvalue
+        The encrypted message should be
+        (required_connection_number (HEX, 2 bytes) +
+        used_remote_listening_port (HEX, 4 bytes) +
+        sha1(cert_pub) ,
+        pyotp.TOTP(time) , ## TODO: client identity must be checked
+        main_pw,
+        ip_in_number_form,
+        salt
+        Total length is 2 + 4 + 40 = 46, 16, 16, ?, 16
+    """
+    global recentsalt, certs, MAX_SALT_BUFFER
+    assert len(msg1) == 46
+    if msg5 in recentsalt:
+        return (None, None, None, None, None)
+    number_hex, port_hex, client_sha1 = msg1[:2], msg1[2:6], msg1[6:46]
+    remote_ip = str(ipaddress.ip_address(int(msg4)))
+    h = hashlib.sha256()
+    h.update((certs[client_sha1][1] + msg4 + msg5 + number_hex).encode("UTF-8")) # Let's add the number_hex into the update string too, in client side and transmit side
+    assert msg2 == pyotp.TOTP(h.hexdigest()).now()
+    main_pw = binascii.unhexlify(msg3)
+    number = int(number_hex, 16)
+    remote_port = int(port_hex, 16)
+    if len(recentsalt) >= MAX_SALT_BUFFER:
+        recentsalt.pop(0)
+    recentsalt.append(msg5)
+    returnvalue=[main_pw,
+            client_sha1,
+            number,
+            remote_port,
+            remote_ip]
+    return returnvalue
         
 def process_msg(*msg):
     global clientlist,serverlist
@@ -86,22 +85,25 @@ def process_msg(*msg):
     ##Need to encrypt something from the client, needed to establish connections, like main_pw,  with the remote server's cert
     ##Maybe design by you
     
-    main_pw_hex="%X" % main_pw #Actually main_pw should be encrypted if you can
+    if client_sha1 in clientlist:
+        server=clientlist[client_sha1]
+    else:
+        server=choice(serverlist.keys())
+        clientlist[client_sha1]=server
+    main_pw_hex="%X" % RSA.encrypt(main_pw,serverlist[server]) #Actually main_pw should be encrypted if you can
     required_hex = "%X" % min((number), 255)
-    sign_hex = '%X' % localpri.sign(salt, None)[0] # better to sign the required numbers as well
+    unsigned_str=salt + number + remote_ip + tcp_port
+    sign_hex = '%X' % localpri.sign(unsigned_str, None)[0] # better to sign the required numbers as well
     #Both items below should be in signature
     remote_ip_hex= "%X" % remote_ip
     remote_port_hex = '%X' % tcp_port
+
     if len(required_hex) == 1:
         required_hex = '0' + required_hex
     if len(sign_hex) == 510:
         sign_hex = '0' + sign_hex
     remote_port_hex = '0' * (4 - len(remote_port_hex)) + remote_port_hex
-    if client_sha1 in clientlist:
-        server=clientlist[client_sha1]
-    else:
-        server=choice(serverlist)[0]
-        clientlist[client_sha1]=server
+
     return  salt + \
             bytes(main_pw_hex,"UTF-8") + \
             bytes(client_sha1,"UTF-8") + \
@@ -110,13 +112,13 @@ def process_msg(*msg):
             bytes(remote_port_hex, "UTF-8") + \
             bytes(localpub_sha1, "UTF-8") + \
             bytes(sign_hex, "UTF-8") + \
-            remotecert.encrypt(mainstr, None)[0]
+            serverlist[server].encrypt(mainstr, None)[0]
     return server
 if __name__ == "__main__":
     MAX_SALT_BUFFER = 255
     certs = dict()
     recentsalt = []
-    serverlist=[]
+    serverlist={}
     clientlist={}
     mainstr=os.urandom(16)
     DEFAULT_REMOTE_HOST = "0.0.0.0"
@@ -134,9 +136,7 @@ if __name__ == "__main__":
         logging.error("Fatal error while loading configuration file.\n" + str(err))
         quit()
 
-    #There should be many remote servers, so put it in 
-    # (ip, host, remote public key) tuples and load it altogether.
-    
+
     try:
         remotecert_data = open(data["remote_cert"], "r").read()
         remotecert = certloader(remotecert_data).importKey()
@@ -164,6 +164,7 @@ if __name__ == "__main__":
 
     try:
         localpub_data = open(data["local_cert_pub"], "r").read()
+        local_pub=certloader(localpub_data).importKey()
         localpub_sha1 = certloader(localpub_data).getSHA1()
     except KeyError as e:
         logging.error(e.tostring() + "is not found in the config file. Quitting.")
@@ -186,7 +187,7 @@ if __name__ == "__main__":
         for server in data["servers"]:
             server_pub_data=open(server[2],"r")
             server_pub=certloader(server_pub_data).importKey()
-            serverlist.append(((server[0],server[1]),server_pub))
+            serverlist[(server[0],server[1])]=server_pub
     except Exception as e:
         print("Fatal error while loading servers")
         print(e)
@@ -204,9 +205,15 @@ if __name__ == "__main__":
             req = dnslib.DNSRecord.parse(msg)
             reqdomain = str(req.q.qname)
             query_data = reqdomain.split('.')
+            if len(query_data<7):
+                raise CorruptedReq
             decrypted_msg=decrypt_udp_msg(query_data[0], query_data[1], query_data[2], query_data[3], query_data[4])
+        except CorruptedReq:
+            logging.info("Corrupted request")
+        except AssertionError:
+            logging.error("authentication failed or corrupted request")
         except Exception as err:
-            logging.info("Corrupted request") ##TODO: distinguish all kinds of errors, e.g. key error. What if decrypted_msg is not generated by error?
+            logging.error("unknown error: " + str(err))
         processed_msg,randserver=process_msg(*decrypted_msg)
         s.sendto(processed_msg,randserver)
         # TODO: use logging to show logs about success and failures
