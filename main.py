@@ -89,10 +89,9 @@ def process_msg(*msg):
     if len(sign_hex) == 510:
         sign_hex = '0' + sign_hex
     remote_port_hex = '0' * (4 - len(remote_port_hex)) + remote_port_hex
-
     return salt +\
-        str(remote_port_hex) +\
         str(required_hex) +\
+        str(remote_port_hex) +\
         str(client_sha1) +\
         str(sign_hex) +\
         main_pw_enc +\
