@@ -28,7 +28,7 @@ class certloader:
             quit()
 
 
-def answer(self, dnsq, addr):
+def answer(dnsq, addr):
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     answer = dnsq.reply()
     answer.header = dnslib.DNSHeader(id=dnsq.header.id,

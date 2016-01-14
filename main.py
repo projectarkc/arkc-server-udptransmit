@@ -7,7 +7,7 @@ import argparse
 import json
 import logging
 import dnslib
-import os
+import string
 from random import choice
 from Crypto.PublicKey import RSA
 from hashlib import sha1
@@ -69,7 +69,8 @@ def process_msg(*msg):
     global clientlist, serverlist
     main_pw, client_sha1, number, tcp_port, remote_ip = msg[
         0], msg[1], msg[2], msg[3], msg[4]
-    salt = os.urandom(16)
+    salt = (''.join(choice(string.ascii_letters) for _ in range(16)))\
+        .encode('ASCII')
 
     if client_sha1 in clientlist:
         server = clientlist[client_sha1]
@@ -77,11 +78,11 @@ def process_msg(*msg):
         server = choice(serverlist.keys())
         clientlist[client_sha1] = server
     # Actually main_pw should be encrypted if you can
-    main_pw_enc = serverlist[server].pubkey.encrypt(
-        main_pw, serverlist[server], None)[0]  # TODO: not the safe option
+    main_pw_enc = serverlist[server].pub.encrypt(
+        main_pw, None)[0]
     required_hex = "%X" % min((number), 255)
     unsigned_str = salt + str(number) + remote_ip + str(tcp_port)
-    sign_hex = '%X' % localpri.sign(unsigned_str, None)[0]
+    sign_hex = '%X' % localpri.sign(unsigned_str.encode("UTF-8"), None)[0]
     remote_port_hex = '%X' % tcp_port
     if len(required_hex) == 1:
         required_hex = '0' + required_hex
@@ -89,14 +90,13 @@ def process_msg(*msg):
         sign_hex = '0' + sign_hex
     remote_port_hex = '0' * (4 - len(remote_port_hex)) + remote_port_hex
 
-    return (salt +
-            bytes(remote_port_hex, "UTF-8") +
-            bytes(required_hex, "UTF-8") +
-            bytes(client_sha1, "UTF-8") +
-            bytes(sign_hex, "UTF-8") +
-            main_pw_enc +
-            bytes(remote_ip, "UTF-8"),
-            server)
+    return salt +\
+        str(remote_port_hex) +\
+        str(required_hex) +\
+        str(client_sha1) +\
+        str(sign_hex) +\
+        main_pw_enc +\
+        str(remote_ip), serverlist[server].addr
 
 if __name__ == "__main__":
     MAX_SALT_BUFFER = 255
@@ -166,18 +166,6 @@ if __name__ == "__main__":
         print (err)
         quit()
 
-    try:
-        localpub_data = open(data["local_cert_pub"], "r").read()
-        local_pub = certloader(localpub_data).importKey()
-    except KeyError as e:
-        logging.error(
-            e.tostring() + "is not found in the config file. Quitting.")
-        quit()
-    except Exception as err:
-        print ("Fatal error while calculating SHA1 digest.")
-        print (err)
-        quit()
-
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.bind(('', 53))
 
@@ -193,16 +181,16 @@ if __name__ == "__main__":
             answer(req, addr)
             reqdomain = str(req.q.qname)
             query_data = reqdomain.split('.')
-            if len(query_data < 7):
+            if len(query_data) < 7:
                 raise CorruptedReq
             decrypted_msg = decrypt_udp_msg(
                 query_data[0], query_data[1], query_data[2], query_data[3], query_data[4])
         except CorruptedReq:
             logging.info("Corrupted request")
-        except AssertionError:
-            logging.error("authentication failed or corrupted request")
-        except Exception as err:
-            logging.error("unknown error: " + str(err))
+        # except AssertionError:
+        #    logging.error("authentication failed or corrupted request")
+        # except Exception as err:
+        #    logging.error("unknown error: " + str(err))
 
         processed_msg, randserver = process_msg(*decrypted_msg)
         s.sendto(processed_msg, randserver)
