@@ -2,7 +2,6 @@
 import socket
 import hashlib
 import binascii
-import ipaddress
 import pyotp
 import argparse
 import json
@@ -45,7 +44,7 @@ def decrypt_udp_msg(msg1, msg2, msg3, msg4, msg5):
     if msg5 in recentsalt:
         return (None, None, None, None, None)
     number_hex, port_hex, client_sha1 = msg1[:2], msg1[2:6], msg1[6:46]
-    remote_ip = msg4
+    remote_ip = msg4.decode("ASCII") + '=' * (7 - len(msg4))
     h = hashlib.sha256()
     # Let's add the number_hex into the update string too, in client side and
     # transmit side
@@ -71,11 +70,6 @@ def process_msg(*msg):
     main_pw, client_sha1, number, tcp_port, remote_ip = msg[
         0], msg[1], msg[2], msg[3], msg[4]
     salt = os.urandom(16)
-    # TODO: use hashlib base64, since python2.7 doesn't allow byte string
-    # Change Format into multiple queries
-
-    # Need to encrypt something from the client, needed to establish connections, like main_pw,  with the remote server's cert
-    # Maybe design by you
 
     if client_sha1 in clientlist:
         server = clientlist[client_sha1]
@@ -86,7 +80,7 @@ def process_msg(*msg):
     main_pw_enc = serverlist[server].pubkey.encrypt(
         main_pw, serverlist[server], None)[0]  # TODO: not the safe option
     required_hex = "%X" % min((number), 255)
-    unsigned_str = salt + number + remote_ip + tcp_port
+    unsigned_str = salt + str(number) + remote_ip + str(tcp_port)
     sign_hex = '%X' % localpri.sign(unsigned_str, None)[0]
     remote_port_hex = '%X' % tcp_port
     if len(required_hex) == 1:
@@ -96,12 +90,12 @@ def process_msg(*msg):
     remote_port_hex = '0' * (4 - len(remote_port_hex)) + remote_port_hex
 
     return (salt +
-            bytes(client_sha1, "UTF-8") +
-            bytes(required_hex, "UTF-8") +
-            remote_ip +
             bytes(remote_port_hex, "UTF-8") +
+            bytes(required_hex, "UTF-8") +
+            bytes(client_sha1, "UTF-8") +
             bytes(sign_hex, "UTF-8") +
-            serverlist[server].encrypt(main_pw_enc, None)[0],
+            main_pw_enc +
+            bytes(remote_ip, "UTF-8"),
             server)
 
 if __name__ == "__main__":
