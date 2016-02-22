@@ -89,6 +89,7 @@ def process_msg(*msg):
     if len(sign_hex) == 510:
         sign_hex = '0' + sign_hex
     remote_port_hex = '0' * (4 - len(remote_port_hex)) + remote_port_hex
+
     return salt +\
         str(required_hex) +\
         str(remote_port_hex) +\
@@ -96,13 +97,18 @@ def process_msg(*msg):
         str(sign_hex) +\
         main_pw_enc +\
         str(remote_ip), serverlist[server].addr
-
+def get_port():
+    pass
+def update_punching_server():
+    pass
 if __name__ == "__main__":
     MAX_SALT_BUFFER = 255
     certs = dict()
     recentsalt = []
     serverlist = {}  # TODO: be initiated, with ServerInfo class
     clientlist = {}
+    punching_servers=[]
+    temp_punching_client={}
     DEFAULT_REMOTE_PORT = 8000
     parser = argparse.ArgumentParser()
     parser.add_argument('-c', '--config', dest="config", default='config.json')
@@ -177,13 +183,26 @@ if __name__ == "__main__":
             logging.info("Received request from (%s, %d)" % (addr[0], addr[1]))
         try:
             req = dnslib.DNSRecord.parse(msg)
-            answer(req, addr)
             reqdomain = str(req.q.qname)
             query_data = reqdomain.split('.')
-            if len(query_data) < 7:
-                raise CorruptedReq
-            decrypted_msg = decrypt_udp_msg(
-                query_data[0], query_data[1], query_data[2], query_data[3], query_data[4])
+            if not len(query_data) < 7:
+                answer(req, addr,"freedom.arkc.org",
+                "webmaster." + "freedom.arkc.org",
+                (20150101, 3600, 3600, 3600, 3600))
+                decrypted_msg = decrypt_udp_msg(
+                    query_data[0], query_data[1], query_data[2], query_data[3], query_data[4], query_data[5])
+                if query_data[6]:
+                    punching_port=get_port()
+                    punching_servers.append(addr)
+            elif query_data[0]== "tcppunching":
+                temp_punching_client[addr]=choice(punching_servers)
+                if req.q.qtype==1:
+                    answer(req,addr,temp_punching_client[addr][0])
+                if req.q.qtype==16:
+                    answer(req,addr,temp_punching_client[addr][1])
+                    del temp_punching_client[addr]
+            update_punching_server()
+
         except CorruptedReq:
             logging.info("Corrupted request")
         # except AssertionError:
@@ -191,6 +210,7 @@ if __name__ == "__main__":
         # except Exception as err:
         #    logging.error("unknown error: " + str(err))
 
-        processed_msg, randserver = process_msg(*decrypted_msg)
-        s.sendto(processed_msg, randserver)
+        if not len(query_data)<7:
+            processed_msg, randserver = process_msg(*decrypted_msg)
+            s.sendto(processed_msg, randserver)
         # TODO: use logging to show logs about success and failures

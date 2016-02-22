@@ -28,7 +28,7 @@ class certloader:
             quit()
 
 
-def answer(dnsq, addr):
+def answer(dnsq, addr,reply):
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     answer = dnsq.reply()
     answer.header = dnslib.DNSHeader(id=dnsq.header.id,
@@ -39,9 +39,7 @@ def answer(dnsq, addr):
             dnslib.QTYPE.SOA,
             ttl=3600,
             rdata=dnslib.SOA(
-                "freedom.arkc.org",
-                "webmaster." + "freedom.arkc.org",
-                (20150101, 3600, 3600, 3600, 3600)
+                str(reply)
             )
         )
     )
