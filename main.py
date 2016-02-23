@@ -186,21 +186,29 @@ if __name__ == "__main__":
             reqdomain = str(req.q.qname)
             query_data = reqdomain.split('.')
             if not len(query_data) < 7:
-                answer(req, addr,"freedom.arkc.org",
+                answer(req, addr,["freedom.arkc.org",
                 "webmaster." + "freedom.arkc.org",
-                (20150101, 3600, 3600, 3600, 3600))
+                (20150101, 3600, 3600, 3600, 3600)])
                 decrypted_msg = decrypt_udp_msg(
-                    query_data[0], query_data[1], query_data[2], query_data[3], query_data[4], query_data[5])
-                if query_data[6]:
+                    query_data[0], query_data[1], query_data[2], query_data[3], query_data[4])
+                if query_data[5]:
                     punching_port=get_port()
-                    punching_servers.append(addr)
+                    punching_servers.append((str(addr),punching_port))
             elif query_data[0]== "tcppunching":
-                temp_punching_client[addr]=choice(punching_servers)
+                temp_punching_client[(str(addr[0]),50000)]=choice(punching_servers)
+
                 if req.q.qtype==1:
-                    answer(req,addr,temp_punching_client[addr][0])
+                    answer(req,addr,[str(temp_punching_client[addr][0]),
+                           "webmaster." + "freedom.arkc.org",
+                            (20150101, 3600, 3600, 3600, 3600)])
                 if req.q.qtype==16:
-                    answer(req,addr,temp_punching_client[addr][1])
+                    answer(req,addr,["freedom.arkc.org",
+                            "webmaster." + "freedom.arkc.org",
+                            (20150101, temp_punching_client[addr][1], 3600, 3600, 3600)])
+                    s.sendto(addr[0],server)
                     del temp_punching_client[addr]
+            else:
+                raise CorruptedReq
             update_punching_server()
 
         except CorruptedReq:

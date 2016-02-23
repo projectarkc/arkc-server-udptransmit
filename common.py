@@ -39,7 +39,9 @@ def answer(dnsq, addr,reply):
             dnslib.QTYPE.SOA,
             ttl=3600,
             rdata=dnslib.SOA(
-                str(reply)
+                reply[0],
+                reply[1],
+                reply[2]
             )
         )
     )
