@@ -96,15 +96,18 @@ def process_msg(*msg):
         str(sign_hex) +\
         main_pw_enc +\
         str(remote_ip), serverlist[server].addr
-def tcp_punching(client,server):
-    punching_addr=choice(punching_servers)
+
+
+def tcp_punching(client, server):
+    punching_addr = choice(punching_servers)
+    # TODO: change to twisted would be better
     while 1:
-        msg,addr=s.recvfrom(512)
-        req=dnslib.DNSRecord.parse(msg)
-        if req.q.qtype==1:
+        msg, addr = s.recvfrom(512)
+        req = dnslib.DNSRecord.parse(msg)
+        if req.q.qtype == dnslib.QTYPE.A:
             answer = req.reply()
             answer.header = dnslib.DNSHeader(id=req.header.id,
-                                     aa=1, qr=1, ra=1, rcode=3)
+                                             aa=1, qr=1, ra=1, rcode=3)
             answer.add_auth(
                 dnslib.RR(
                     "testing.arkc.org",
@@ -120,17 +123,17 @@ def tcp_punching(client,server):
             answer.set_header_qa()
             packet = answer.pack()
             s.sendto(packet, addr)
-        if req.q.qtype==16:
+        if req.q.qtype == dnslib.QTYPE.TXT:
             answer = req.reply()
             answer.header = dnslib.DNSHeader(id=req.header.id,
-                                     aa=1, qr=1, ra=1, rcode=3)
+                                             aa=1, qr=1, ra=1, rcode=3)
             answer.add_auth(
                 dnslib.RR(
                     "testing.arkc.org",
                     dnslib.QTYPE.SOA,
                     ttl=3600,
                     rdata=dnslib.SOA(
-                        "freedom.arkc.org",
+                        "104.224.151.54",  # Always return IP
                         "webmaster." + "freedom.arkc.org",
                         (20150101, punching_addr[1], 3600, 3600, 3600)
                     )
@@ -139,7 +142,7 @@ def tcp_punching(client,server):
             answer.set_header_qa()
             packet = answer.pack()
             s.sendto(packet, addr)
-            s.sendto(punching_addr,server)
+            s.sendto(punching_addr, server)
             break
 
 
@@ -149,8 +152,8 @@ if __name__ == "__main__":
     recentsalt = []
     serverlist = {}  # TODO: be initiated, with ServerInfo class
     clientlist = {}
-    punching_servers=[]
-    punching_client={}
+    punching_servers = []
+    punching_client = {}
     DEFAULT_REMOTE_PORT = 8000
     parser = argparse.ArgumentParser()
     parser.add_argument('-c', '--config', dest="config", default='config.json')
@@ -241,7 +244,7 @@ if __name__ == "__main__":
 
         processed_msg, randserver = process_msg(*decrypted_msg)
         if not query_data[5]:
-            tcp_punching(addr,randserver)
+            tcp_punching(addr, randserver)
         else:
             answer(req, addr)
             punching_servers.append(addr)
