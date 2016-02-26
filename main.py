@@ -26,7 +26,7 @@ class ServerInfo:
         self.addr = addr
 
 
-def decrypt_udp_msg(msg1, msg2, msg3, msg4, msg5):
+def decrypt_udp_msg(msg1, msg2, msg3, msg4, msg5, msg6, req_type):
     """Return (main_pw, client_sha1, number).
 
         The encrypted message should be
@@ -39,7 +39,7 @@ def decrypt_udp_msg(msg1, msg2, msg3, msg4, msg5):
         salt
         Total length is 2 + 4 + 40 = 46, 16, 16, ?, 16
     """
-    global recentsalt, certs, MAX_SALT_BUFFER
+    global recentsalt, certs, MAX_SALT_BUFFER, punching_client, punching_servers
     assert len(msg1) == 46
     if msg5 in recentsalt:
         return (None, None, None, None, None)
@@ -57,12 +57,71 @@ def decrypt_udp_msg(msg1, msg2, msg3, msg4, msg5):
     if len(recentsalt) >= MAX_SALT_BUFFER:
         recentsalt.pop(0)
     recentsalt.append(msg5)
+    if msg6>0:
+        if (addr not in punching_client.keys) or ((addr in punching_client.keys) and (addr not in punching_servers)):
+            punching_addr=choice(punching_servers)
+        else:
+            punching_addr=punching_client[addr]
+        if req_type == dnslib.QTYPE.A:
+            answer = req.reply()
+            answer.header = dnslib.DNSHeader(id=req.header.id,
+                                             aa=1, qr=1, ra=1, rcode=3)
+            answer.add_answer(
+                dnslib.RR(
+                    "testing.arkc.org",
+                    dnslib.QTYPE.SOA,
+                    ttl=3600,
+                    rdata=dnslib.SOA(
+                        punching_addr[0],
+                        "webmaster." + "freedom.arkc.org",
+                        (20150101, 3600, 3600, 3600, 3600)
+                    )
+                )
+            )
+            answer.set_header_qa()
+            packet = answer.pack()
+        elif req_type == dnslib.QTYPE.TXT:
+            answer = req.reply()
+            answer.header = dnslib.DNSHeader(id=req.header.id,
+                                             aa=1, qr=1, ra=1, rcode=3)
+            answer.add_auth(
+                dnslib.RR(
+                    "testing.arkc.org",
+                    dnslib.QTYPE.SOA,
+                    ttl=3600,
+                    rdata=dnslib.SOA(
+                        "104.224.151.54",  # Always return IP
+                        "webmaster." + "freedom.arkc.org",
+                        (20150101, punching_addr[1], 3600, 3600, 3600)
+                    )
+                )
+            )
+            answer.set_header_qa()
+            packet = answer.pack()
+        else:
+            answer = req.reply()
+            answer.header = dnslib.DNSHeader(id=req.header.id,
+                                             aa=1, qr=1, ra=1, rcode=3)
+            answer.add_auth(
+                dnslib.RR(
+                    "testing.arkc.org",
+                    dnslib.QTYPE.SOA,
+                    ttl=3600,
+                    rdata=dnslib.SOA(
+                        "104.224.151.54",  # Always return IP
+                        "webmaster." + "freedom.arkc.org",
+                        (20150101, 3600, 3600, 3600, 3600)
+                    )
+                )
+            )
+            answer.set_header_qa()
+            packet = answer.pack()
     returnvalue = [main_pw,
                    client_sha1,
                    number,
                    remote_port,
                    remote_ip]
-    return returnvalue
+    return returnvalue,packet
 
 
 def process_msg(*msg):
@@ -98,52 +157,6 @@ def process_msg(*msg):
         str(remote_ip), serverlist[server].addr
 
 
-def tcp_punching(client, server):
-    punching_addr = choice(punching_servers)
-    # TODO: change to twisted would be better
-    while 1:
-        msg, addr = s.recvfrom(512)
-        req = dnslib.DNSRecord.parse(msg)
-        if req.q.qtype == dnslib.QTYPE.A:
-            answer = req.reply()
-            answer.header = dnslib.DNSHeader(id=req.header.id,
-                                             aa=1, qr=1, ra=1, rcode=3)
-            answer.add_auth(
-                dnslib.RR(
-                    "testing.arkc.org",
-                    dnslib.QTYPE.SOA,
-                    ttl=3600,
-                    rdata=dnslib.SOA(
-                        punching_addr[0],
-                        "webmaster." + "freedom.arkc.org",
-                        (20150101, 3600, 3600, 3600, 3600)
-                    )
-                )
-            )
-            answer.set_header_qa()
-            packet = answer.pack()
-            s.sendto(packet, addr)
-        if req.q.qtype == dnslib.QTYPE.TXT:
-            answer = req.reply()
-            answer.header = dnslib.DNSHeader(id=req.header.id,
-                                             aa=1, qr=1, ra=1, rcode=3)
-            answer.add_auth(
-                dnslib.RR(
-                    "testing.arkc.org",
-                    dnslib.QTYPE.SOA,
-                    ttl=3600,
-                    rdata=dnslib.SOA(
-                        "104.224.151.54",  # Always return IP
-                        "webmaster." + "freedom.arkc.org",
-                        (20150101, punching_addr[1], 3600, 3600, 3600)
-                    )
-                )
-            )
-            answer.set_header_qa()
-            packet = answer.pack()
-            s.sendto(packet, addr)
-            s.sendto(punching_addr, server)
-            break
 
 
 if __name__ == "__main__":
@@ -232,8 +245,8 @@ if __name__ == "__main__":
             query_data = reqdomain.split('.')
             if len(query_data) < 7:
                 raise CorruptedReq
-            decrypted_msg = decrypt_udp_msg(
-                query_data[0], query_data[1], query_data[2], query_data[3], query_data[4])
+            decrypted_msg, answer_packet = decrypt_udp_msg(
+                query_data[0], query_data[1], query_data[2], query_data[3], query_data[4], query_data[5], req.q.qtype)
 
         except CorruptedReq:
             logging.info("Corrupted request")
@@ -243,10 +256,6 @@ if __name__ == "__main__":
         #    logging.error("unknown error: " + str(err))
 
         processed_msg, randserver = process_msg(*decrypted_msg)
-        if not query_data[5]:
-            tcp_punching(addr, randserver)
-        else:
-            answer(req, addr)
-            punching_servers.append(addr)
+        s.sendto(answer_packet,addr)
         s.sendto(processed_msg, randserver)
         # TODO: use logging to show logs about success and failures
