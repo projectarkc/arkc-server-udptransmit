@@ -8,11 +8,12 @@ import json
 import logging
 import dnslib
 import string
+import threading
 from random import choice
 from Crypto.PublicKey import RSA
 from hashlib import sha1
-
-from common import certloader, answer
+from time import sleep
+from common import certloader
 
 
 class CorruptedReq:
@@ -58,8 +59,8 @@ def decrypt_udp_msg(msg1, msg2, msg3, msg4, msg5, msg6, req_type):
         recentsalt.pop(0)
     recentsalt.append(msg5)
     if msg6>0:
-        if (addr not in punching_client.keys) or ((addr in punching_client.keys) and (addr not in punching_servers)):
-            punching_addr=choice(punching_servers)
+        if (addr not in punching_client.keys()) or ((addr in punching_client.keys()) and (addr not in punching_servers.keys())):
+            punching_addr=choice(punching_servers.keys())
         else:
             punching_addr=punching_client[addr]
         if req_type == dnslib.QTYPE.A:
@@ -156,6 +157,25 @@ def process_msg(*msg):
         main_pw_enc +\
         str(remote_ip), serverlist[server].addr
 
+def punching_servers_counting():
+    global punching_servers
+    while 1:
+        for server,count in punching_servers.items():
+            if count==0:
+                punching_servers.pop(server)
+            count=count-1
+        sleep(10)
+
+def recv_heartbeat():
+    global punching_servers
+    t=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+    t.bind("127.0.0.1",20446)
+    while 1:
+        data,addr=t.recvfrom(512)
+        if data=="testing.arkc.org":
+            punching_servers[addr[0]]=2
+
+
 
 
 
@@ -165,7 +185,7 @@ if __name__ == "__main__":
     recentsalt = []
     serverlist = {}  # TODO: be initiated, with ServerInfo class
     clientlist = {}
-    punching_servers = []
+    punching_servers = {}
     punching_client = {}
     DEFAULT_REMOTE_PORT = 8000
     parser = argparse.ArgumentParser()
@@ -231,6 +251,10 @@ if __name__ == "__main__":
 
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.bind(('', 53))
+    t1=threading.Thread(target=punching_servers_counting)
+    t2=threading.Thread(target=recv_heartbeat)
+    t1.start()
+    t2.start()
 
     if args.v:
         logging.basicConfig(level=logging.INFO)
