@@ -12,7 +12,7 @@ from random import choice
 from Crypto.PublicKey import RSA
 from hashlib import sha1
 
-from common import certloader, answer
+from common import certloader, answer, certstorage
 
 
 class CorruptedReq:
@@ -39,17 +39,20 @@ def decrypt_udp_msg(msg1, msg2, msg3, msg4, msg5):
         salt
         Total length is 2 + 4 + 40 = 46, 16, 16, ?, 16
     """
-    global recentsalt, certs, MAX_SALT_BUFFER
+    global recentsalt, certs_db, MAX_SALT_BUFFER
     assert len(msg1) == 46
     if msg5 in recentsalt:
         return (None, None, None, None, None)
     number_hex, port_hex, client_sha1 = msg1[:2], msg1[2:6], msg1[6:46]
+    cert = certs_db.query(client_sha1)
+    if cert is None:
+        raise CorruptedReq
     remote_ip = msg4.decode("ASCII") + '=' * (7 - len(msg4))
     h = hashlib.sha256()
     # Let's add the number_hex into the update string too, in client side and
     # transmit side
     h.update(
-        (certs[client_sha1][1] + msg4 + msg5 + number_hex).encode("UTF-8"))
+        (cert[1] + msg4 + msg5 + number_hex).encode("UTF-8"))
     assert msg2 == pyotp.TOTP(h.hexdigest()).now()
     main_pw = binascii.unhexlify(msg3)
     number = int(number_hex, 16)
@@ -66,6 +69,7 @@ def decrypt_udp_msg(msg1, msg2, msg3, msg4, msg5):
 
 
 def process_msg(*msg):
+    # should send client key to the server, so the server can be easier
     global clientlist, serverlist
     main_pw, client_sha1, number, tcp_port, remote_ip = msg[
         0], msg[1], msg[2], msg[3], msg[4]
@@ -126,10 +130,18 @@ if __name__ == "__main__":
                 remote_cert = RSA.importKey(remote_cert_txt)
                 certs[sha1(remote_cert_txt).hexdigest()] =\
                      [remote_cert, client[1]]
-    except KeyError as e:
-        logging.error(
-            e.tostring() + "is not found in the config file. Quitting.")
+    except Exception as err:
+        print ("Fatal error while loading clients' certificate.")
+        print (err)
         quit()
+
+    try:
+        certsdbpath = data["clients_db"]
+    except KeyError:
+        certsdbpath = None
+
+    try:
+        certs_db = certstorage(certs, certsdbpath)
     except Exception as err:
         print ("Fatal error while loading clients' certificate.")
         print (err)

@@ -3,6 +3,8 @@ from hashlib import sha1
 import dnslib
 import socket
 
+import sqlite3
+
 
 class certloader:
 
@@ -48,3 +50,33 @@ def answer(dnsq, addr):
     answer.set_header_qa()
     packet = answer.pack()
     s.sendto(packet, addr)
+
+
+class certstorage:
+    """ A sqlite client to check if fetch certificates, authenticate, and buffer"""
+
+    def __init__(self, db_buffer_dict={}, sqlite_path=None):
+        #certs[sha1(remote_cert_txt).hexdigest()] =[remote_cert, client[1]]
+        self.db_buffer_dict = db_buffer_dict
+        if sqlite_path is not None:
+            self.db_conn = sqlite3.connect(sqlite_path)
+            self.db_cursor = self.db_conn.cursor()
+
+    def query(self, sha1_value):
+        # Currently the DB is for appending only
+        if sha1_value not in self.db_buffer_dict:
+            t = (sha1_value,)
+            self.db_cursor.execute('SELECT * FROM certs WHERE pub_sha1=?', t)
+            rec = self.db_cursor.fetchone()
+            if len(rec) != 1:
+                return None
+            else:
+                key = RSA.importKey(rec[0][2])
+                self.db_buffer_dict[sha1_value] = [key, rec[1]]
+        return self.db_buffer_dict[sha1_value]
+
+    def close(self):
+        try:
+            self.db_conn.close()
+        except:
+            pass
