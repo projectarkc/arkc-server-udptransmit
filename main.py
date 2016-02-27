@@ -6,6 +6,7 @@ import pyotp
 import argparse
 import json
 import logging
+import sys
 import dnslib
 import string
 from random import choice
@@ -121,7 +122,7 @@ if __name__ == "__main__":
     except Exception as err:
         logging.error(
             "Fatal error while loading configuration file.\n" + str(err))
-        quit()
+        sys.exit()
 
     try:
         for client in data["clients"]:
@@ -133,7 +134,7 @@ if __name__ == "__main__":
     except Exception as err:
         print ("Fatal error while loading clients' certificate.")
         print (err)
-        quit()
+        sys.exit()
 
     try:
         certsdbpath = data["clients_db"]
@@ -145,7 +146,7 @@ if __name__ == "__main__":
     except Exception as err:
         print ("Fatal error while loading clients' certificate.")
         print (err)
-        quit()
+        sys.exit()
 
     try:
         for server in data["servers"]:
@@ -157,11 +158,11 @@ if __name__ == "__main__":
     except KeyError as e:
         logging.error(
             e.tostring() + "is not found in the config file. Quitting.")
-        quit()
+        sys.exit()
     except Exception as err:
         print ("Fatal error while loading servers' certificate.")
         print (err)
-        quit()
+        sys.exit()
 
     try:
         localpri_data = open(data["local_cert"], "r").read()
@@ -171,11 +172,11 @@ if __name__ == "__main__":
     except KeyError as e:
         logging.error(
             e.tostring() + "is not found in the config file. Quitting.")
-        quit()
+        sys.exit()
     except Exception as err:
         print ("Fatal error while loading local certificate.")
         print (err)
-        quit()
+        sys.exit()
 
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.bind(('', 53))
