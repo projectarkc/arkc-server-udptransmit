@@ -27,7 +27,7 @@ class ServerInfo:
         self.addr = addr
 
 
-def decrypt_udp_msg(msg1, msg2, msg3, msg4, msg5, msg6, req_type):
+def decrypt_udp_msg(msg1, msg2, msg3, msg4, msg5, msg6, req_type,addr):
     """Return (main_pw, client_sha1, number).
 
         The encrypted message should be
@@ -175,8 +175,17 @@ def recv_heartbeat():
         if data=="testing.arkc.org":
             punching_servers[addr[0]]=2
 
-
-
+def send_modified_packet():
+    global decrypted_msg,s
+    saved_decrypted_msg=decrypted_msg
+    m=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+    m.bind(("127.0.0.1",20447))
+    data,addr=m.recvfrom(512)
+    real_port=data[16:]
+    decrypted_msg[3]=real_port
+    processed_msg, randserver = process_msg(*saved_decrypted_msg)
+    s.sendto(processed_msg, randserver)
+    m.close()
 
 
 if __name__ == "__main__":
@@ -270,16 +279,18 @@ if __name__ == "__main__":
             if len(query_data) < 7:
                 raise CorruptedReq
             decrypted_msg, answer_packet = decrypt_udp_msg(
-                query_data[0], query_data[1], query_data[2], query_data[3], query_data[4], query_data[5], req.q.qtype)
-
+                query_data[0], query_data[1], query_data[2], query_data[3], query_data[4], query_data[5], req.q.qtype,addr)
+            s.sendto(answer_packet,addr)
+            if query_data[5]==0:
+                processed_msg, randserver = process_msg(*decrypted_msg)
+                s.sendto(processed_msg, randserver)
+            elif query_data[5]!=0 and req.q.qtype==dnslib.QTYPE.TXT:
+                modify_port=threading.Thread(target=send_modified_packet)
+                modify_port.start()
         except CorruptedReq:
             logging.info("Corrupted request")
         # except AssertionError:
         #    logging.error("authentication failed or corrupted request")
         # except Exception as err:
         #    logging.error("unknown error: " + str(err))
-
-        processed_msg, randserver = process_msg(*decrypted_msg)
-        s.sendto(answer_packet,addr)
-        s.sendto(processed_msg, randserver)
         # TODO: use logging to show logs about success and failures
