@@ -27,7 +27,7 @@ class ServerInfo:
         self.addr = addr
 
 
-def decrypt_udp_msg(msg1, msg2, msg3, msg4, msg5, msg6, req_type,addr):
+def decrypt_udp_msg(msg1, msg2, msg3, msg4, msg5, msg6, req_type, addr):
     """Return (main_pw, client_sha1, number).
 
         The encrypted message should be
@@ -58,11 +58,11 @@ def decrypt_udp_msg(msg1, msg2, msg3, msg4, msg5, msg6, req_type,addr):
     if len(recentsalt) >= MAX_SALT_BUFFER:
         recentsalt.pop(0)
     recentsalt.append(msg5)
-    if msg6>0:
+    if msg6 > 0:
         if (addr not in punching_client.keys()) or ((addr in punching_client.keys()) and (addr not in punching_servers.keys())):
-            punching_addr=choice(punching_servers.keys())
+            punching_addr = choice(punching_servers.keys())
         else:
-            punching_addr=punching_client[addr]
+            punching_addr = punching_client[addr]
         if req_type == dnslib.QTYPE.A:
             answer = req.reply()
             answer.header = dnslib.DNSHeader(id=req.header.id,
@@ -122,7 +122,7 @@ def decrypt_udp_msg(msg1, msg2, msg3, msg4, msg5, msg6, req_type,addr):
                    number,
                    remote_port,
                    remote_ip]
-    return returnvalue,packet
+    return returnvalue, packet
 
 
 def process_msg(*msg):
@@ -157,32 +157,35 @@ def process_msg(*msg):
         main_pw_enc +\
         str(remote_ip), serverlist[server].addr
 
+
 def punching_servers_counting():
     global punching_servers
     while 1:
-        for server,count in punching_servers.items():
-            if count==0:
+        for server, count in punching_servers.items():
+            if count == 0:
                 punching_servers.pop(server)
-            count=count-1
+            count = count - 1
         sleep(10)
+
 
 def recv_heartbeat():
     global punching_servers
-    t=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
-    t.bind("127.0.0.1",20446)
+    t = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    t.bind("127.0.0.1", 20446)
     while 1:
-        data,addr=t.recvfrom(512)
-        if data=="testing.arkc.org":
-            punching_servers[addr[0]]=2
+        data, addr = t.recvfrom(512)
+        if data == "testing.arkc.org":
+            punching_servers[addr[0]] = 2
+
 
 def send_modified_packet():
-    global decrypted_msg,s
-    saved_decrypted_msg=decrypted_msg
-    m=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
-    m.bind(("127.0.0.1",20447))
-    data,addr=m.recvfrom(512)
-    real_port=data[16:]
-    decrypted_msg[3]=real_port
+    global decrypted_msg, s
+    saved_decrypted_msg = decrypted_msg
+    m = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    m.bind(("127.0.0.1", 20447))
+    data, addr = m.recvfrom(512)
+    real_port = data[16:]
+    decrypted_msg[3] = real_port
     processed_msg, randserver = process_msg(*saved_decrypted_msg)
     s.sendto(processed_msg, randserver)
     m.close()
@@ -260,8 +263,8 @@ if __name__ == "__main__":
 
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.bind(('', 53))
-    t1=threading.Thread(target=punching_servers_counting)
-    t2=threading.Thread(target=recv_heartbeat)
+    t1 = threading.Thread(target=punching_servers_counting)
+    t2 = threading.Thread(target=recv_heartbeat)
     t1.start()
     t2.start()
 
@@ -279,13 +282,13 @@ if __name__ == "__main__":
             if len(query_data) < 7:
                 raise CorruptedReq
             decrypted_msg, answer_packet = decrypt_udp_msg(
-                query_data[0], query_data[1], query_data[2], query_data[3], query_data[4], query_data[5], req.q.qtype,addr)
-            s.sendto(answer_packet,addr)
-            if query_data[5]==0:
+                query_data[0], query_data[1], query_data[2], query_data[3], query_data[4], query_data[5], req.q.qtype, addr)
+            s.sendto(answer_packet, addr)
+            if query_data[5] == 0:
                 processed_msg, randserver = process_msg(*decrypted_msg)
                 s.sendto(processed_msg, randserver)
-            elif query_data[5]!=0 and req.q.qtype==dnslib.QTYPE.TXT:
-                modify_port=threading.Thread(target=send_modified_packet)
+            elif query_data[5] != 0 and req.q.qtype == dnslib.QTYPE.TXT:
+                modify_port = threading.Thread(target=send_modified_packet)
                 modify_port.start()
         except CorruptedReq:
             logging.info("Corrupted request")
