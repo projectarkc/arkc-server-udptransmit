@@ -58,65 +58,38 @@ def decrypt_udp_msg(msg1, msg2, msg3, msg4, msg5, msg6, req_type, addr):
     if len(recentsalt) >= MAX_SALT_BUFFER:
         recentsalt.pop(0)
     recentsalt.append(msg5)
-    if msg6 > 0:
+    if msg6 == 0:
         if (addr not in punching_client.keys()) or ((addr in punching_client.keys()) and (addr not in punching_servers.keys())):
             punching_addr = choice(punching_servers.keys())
         else:
             punching_addr = punching_client[addr]
         if req_type == dnslib.QTYPE.A:
             answer = req.reply()
-            answer.header = dnslib.DNSHeader(id=req.header.id,
-                                             aa=1, qr=1, ra=1, rcode=3)
-            answer.add_answer(
-                dnslib.RR(
-                    "testing.arkc.org",
-                    dnslib.QTYPE.SOA,
-                    ttl=3600,
-                    rdata=dnslib.SOA(
-                        punching_addr[0],
-                        "webmaster." + "freedom.arkc.org",
-                        (20150101, 3600, 3600, 3600, 3600)
-                    )
-                )
-            )
-            answer.set_header_qa()
+            answer.add_answer(dnslib.RR(req.q.qname,rdata=dnslib.TXT(punching_addr[0])))
             packet = answer.pack()
         elif req_type == dnslib.QTYPE.TXT:
             answer = req.reply()
-            answer.header = dnslib.DNSHeader(id=req.header.id,
-                                             aa=1, qr=1, ra=1, rcode=3)
-            answer.add_auth(
-                dnslib.RR(
-                    "testing.arkc.org",
-                    dnslib.QTYPE.SOA,
-                    ttl=3600,
-                    rdata=dnslib.SOA(
-                        "104.224.151.54",  # Always return IP
-                        "webmaster." + "freedom.arkc.org",
-                        (20150101, punching_addr[1], 3600, 3600, 3600)
-                    )
+            answer.add_answer(dnslib.RR(req.q.qname,rdata=dnslib.TXT(punching_addr[1])))
+            packet = answer.pack()
+    else:
+        punching_servers[(addr[0],50009)]=60 #TODO: add port into message, should not be a fixed port
+        answer = req.reply()
+        answer.header = dnslib.DNSHeader(id=req.header.id,
+                                         aa=1, qr=1, ra=1, rcode=3)
+        answer.add_auth(
+            dnslib.RR(
+                "testing.arkc.org",
+                dnslib.QTYPE.SOA,
+                ttl=3600,
+                rdata=dnslib.SOA(
+                    "104.224.151.54",  # Always return IP
+                    "webmaster." + "freedom.arkc.org",
+                    (20150101, 3600, 3600, 3600, 3600)
                 )
             )
-            answer.set_header_qa()
-            packet = answer.pack()
-        else:
-            answer = req.reply()
-            answer.header = dnslib.DNSHeader(id=req.header.id,
-                                             aa=1, qr=1, ra=1, rcode=3)
-            answer.add_auth(
-                dnslib.RR(
-                    "testing.arkc.org",
-                    dnslib.QTYPE.SOA,
-                    ttl=3600,
-                    rdata=dnslib.SOA(
-                        "104.224.151.54",  # Always return IP
-                        "webmaster." + "freedom.arkc.org",
-                        (20150101, 3600, 3600, 3600, 3600)
-                    )
-                )
-            )
-            answer.set_header_qa()
-            packet = answer.pack()
+        )
+        answer.set_header_qa()
+        packet = answer.pack()
     returnvalue = [main_pw,
                    client_sha1,
                    number,
@@ -158,37 +131,19 @@ def process_msg(*msg):
         str(remote_ip), serverlist[server].addr
 
 
-def punching_servers_counting():
+def server_keep_alive():
+    global punching_servers
+    #TODO: another way to check if servers are alive:randomly send message to servers
+    pass
+
+def server_count():
     global punching_servers
     while 1:
-        for server, count in punching_servers.items():
-            if count == 0:
+        for server, count in punching_servers:
+            count=count-1
+            if count==0:
                 punching_servers.pop(server)
-            count = count - 1
-        sleep(10)
-
-
-def recv_heartbeat():
-    global punching_servers
-    t = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    t.bind("127.0.0.1", 20446)
-    while 1:
-        data, addr = t.recvfrom(512)
-        if data == "testing.arkc.org":
-            punching_servers[addr[0]] = 2
-
-
-def send_modified_packet():
-    global decrypted_msg, s
-    saved_decrypted_msg = decrypted_msg
-    m = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    m.bind(("127.0.0.1", 20447))
-    data, addr = m.recvfrom(512)
-    real_port = data[16:]
-    decrypted_msg[3] = real_port
-    processed_msg, randserver = process_msg(*saved_decrypted_msg)
-    s.sendto(processed_msg, randserver)
-    m.close()
+        sleep(1)
 
 
 if __name__ == "__main__":
@@ -263,10 +218,6 @@ if __name__ == "__main__":
 
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.bind(('', 53))
-    t1 = threading.Thread(target=punching_servers_counting)
-    t2 = threading.Thread(target=recv_heartbeat)
-    t1.start()
-    t2.start()
 
     if args.v:
         logging.basicConfig(level=logging.INFO)
@@ -284,12 +235,8 @@ if __name__ == "__main__":
             decrypted_msg, answer_packet = decrypt_udp_msg(
                 query_data[0], query_data[1], query_data[2], query_data[3], query_data[4], query_data[5], req.q.qtype, addr)
             s.sendto(answer_packet, addr)
-            if query_data[5] == 0:
-                processed_msg, randserver = process_msg(*decrypted_msg)
-                s.sendto(processed_msg, randserver)
-            elif query_data[5] != 0 and req.q.qtype == dnslib.QTYPE.TXT:
-                modify_port = threading.Thread(target=send_modified_packet)
-                modify_port.start()
+            processed_msg, randserver = process_msg(*decrypted_msg)
+            s.sendto(processed_msg, randserver)
         except CorruptedReq:
             logging.info("Corrupted request")
         # except AssertionError:
