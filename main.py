@@ -90,11 +90,20 @@ def decrypt_udp_msg(msg1, msg2, msg3, msg4, msg5, msg6, req_type, addr):
         )
         answer.set_header_qa()
         packet = answer.pack()
-    returnvalue = [main_pw,
-                   client_sha1,
-                   number,
-                   remote_port,
-                   remote_ip]
+    if msg6>0:
+        returnvalue = [main_pw,
+                       client_sha1,
+                       number,
+                       remote_port,
+                       remote_ip,
+                       msg6]
+    else:
+        returnvalue=[main_pw,
+                       client_sha1,
+                       number,
+                       punching_addr[1],
+                       punching_addr[0],
+                       msg6]
     return returnvalue, packet
 
 
@@ -128,7 +137,8 @@ def process_msg(*msg):
         str(client_sha1) +\
         str(sign_hex) +\
         main_pw_enc +\
-        str(remote_ip), serverlist[server].addr
+        str(remote_ip)+\
+        str(msg[5]), serverlist[server].addr
 
 
 def server_keep_alive():
@@ -233,7 +243,7 @@ if __name__ == "__main__":
             if len(query_data) < 7:
                 raise CorruptedReq
             decrypted_msg, answer_packet = decrypt_udp_msg(
-                query_data[0], query_data[1], query_data[2], query_data[3], query_data[4], query_data[5], req.q.qtype, addr)
+                query_data[0], query_data[1], query_data[2], query_data[3], query_data[4], int(query_data[5]), req.q.qtype, addr)
             s.sendto(answer_packet, addr)
             processed_msg, randserver = process_msg(*decrypted_msg)
             s.sendto(processed_msg, randserver)
