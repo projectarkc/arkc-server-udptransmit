@@ -37,10 +37,14 @@ class udpserver(object):
 
     def __init__(self, certs, serverlist):
         self.certs = certs
-        self.recentsalt = []
-        self.serverlist = self.serverlist
+        self.recentsalt = []  # recently used salts, prevent replay attack
+        self.serverlist = serverlist  # server ready to use
+        # store current clients' record # TODO: don't be binding
         self.clientlist = {}
+        # store servers ready to use #TODO: why give value 60?
         self.punching_servers = {}
+        # store the punching client in use #TODO: update it after a server
+        # check
         self.punching_client = {}
 
     def serve(self):
@@ -56,6 +60,7 @@ class udpserver(object):
                 reqdomain = str(req.q.qname)
                 decrypted_msg = self.decrypt_udp_msg(
                     reqdomain, addr)
+                answer = req.reply()
                 if msg[4] == 0:
                     if addr not in self.punching_client:
                         punching_addr = choice(self.punching_servers.keys())
@@ -64,7 +69,6 @@ class udpserver(object):
                     msg[3] = punching_addr[1]
                     msg[4] = punching_addr[0]
                     if req.q.qtype == dnslib.QTYPE.A:
-                        answer = req.reply()
                         answer.add_answer(
                             dnslib.RR(req.q.qname, rdata=dnslib.TXT(punching_addr[0])))
                         answer.add_auth(
@@ -91,7 +95,6 @@ class udpserver(object):
                 else:
                     # TODO: add port into message, should not be a fixed port
                     self.punching_servers[(addr[0], 50009)] = 60
-                    answer = req.reply()
                     answer.header = dnslib.DNSHeader(id=req.header.id,
                                                      aa=1, qr=1, ra=1, rcode=3)
                     answer.add_auth(
@@ -284,4 +287,7 @@ if __name__ == "__main__":
     async.run()
 
     dns = udpserver(certs, serverlist)
-    dns.serve()
+    try:
+        dns.serve()
+    except KeyboardInterrupt:
+        pass
