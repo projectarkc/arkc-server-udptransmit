@@ -14,10 +14,12 @@ from random import choice
 from Crypto.PublicKey import RSA
 from hashlib import sha1
 from time import sleep
-from common import certloader
+from common import certloader,get_ip
+from nat_server import punching_server
 
 MAX_SALT_BUFFER = 255
 DEFAULT_REMOTE_PORT = 8000
+
 
 # TODO: Generic hole punching server dispatcher
 
@@ -27,16 +29,15 @@ class CorruptedReq:
 
 
 class ServerInfo:
-
     def __init__(self, pub, addr):
         self.pub = pub
         self.addr = addr
 
 
 class udpserver(object):
-
     def __init__(self, certs, serverlist):
         self.certs = certs
+        self.ip=get_ip()
         self.recentsalt = []  # recently used salts, prevent replay attack
         self.serverlist = serverlist  # server ready to use
         # store current clients' record # TODO: don't be binding
@@ -61,9 +62,12 @@ class udpserver(object):
                 decrypted_msg = self.decrypt_udp_msg(
                     reqdomain, addr)
                 answer = req.reply()
-                if msg[4] == 0:
+                if msg[5] == 0:
                     if addr not in self.punching_client:
-                        punching_addr = choice(self.punching_servers.keys())
+                        if self.punching_servers:
+                            punching_addr = choice(self.punching_servers.keys())
+                        else:
+                            punching_addr=(self.ip,24009)
                     else:
                         punching_addr = self.punching_client[addr]
                     msg[3] = punching_addr[1]
@@ -94,7 +98,7 @@ class udpserver(object):
                         s.sendto(answer.pack(), addr)
                 else:
                     # TODO: add port into message, should not be a fixed port
-                    self.punching_servers[(addr[0], 50009)] = 60
+                    # self.punching_servers[(addr[0], 50009)] = 60
                     answer.header = dnslib.DNSHeader(id=req.header.id,
                                                      aa=1, qr=1, ra=1, rcode=3)
                     answer.add_auth(
@@ -116,11 +120,11 @@ class udpserver(object):
                     s.sendto(processed_msg, randserver)
             except CorruptedReq:
                 logging.info("Corrupted request")
-        # except AssertionError:
-        #    logging.error("authentication failed or corrupted request")
-        # except Exception as err:
-        #    logging.error("unknown error: " + str(err))
-        # TODO: use logging to show logs about success and failures
+                # except AssertionError:
+                #    logging.error("authentication failed or corrupted request")
+                # except Exception as err:
+                #    logging.error("unknown error: " + str(err))
+                # TODO: use logging to show logs about success and failures
 
     def decrypt_udp_msg(self, querydata_raw):
         """Return (main_pw, client_sha1, number).
@@ -142,12 +146,12 @@ class udpserver(object):
         if querydata[4] in self.recentsalt:
             return (None, None, None, None, None)
         number_hex, port_hex, client_sha1 = querydata[
-            0][:2], querydata[0][2:6], querydata[0][6:46]
+                                                0][:2], querydata[0][2:6], querydata[0][6:46]
         remote_ip = querydata[3].decode(
             "ASCII") + '=' * (7 - len(querydata[3]))
         h = hashlib.sha256()
         h.update(
-                (self.certs[client_sha1][1] + querydata[3] + querydata[4] + number_hex).encode("UTF-8"))
+            (self.certs[client_sha1][1] + querydata[3] + querydata[4] + number_hex).encode("UTF-8"))
         assert querydata[1] == pyotp.TOTP(h.hexdigest()).now()
         main_pw = binascii.unhexlify(querydata[2])
         number = int(number_hex, 16)
@@ -163,8 +167,8 @@ class udpserver(object):
 
     def process_msg(self, *msg):
         main_pw, client_sha1, number, tcp_port, remote_ip = msg[
-            0], msg[1], msg[2], msg[3], msg[4]
-        salt = (''.join(choice(string.ascii_letters) for _ in range(16)))\
+                                                                0], msg[1], msg[2], msg[3], msg[4]
+        salt = (''.join(choice(string.ascii_letters) for _ in range(16))) \
             .encode('ASCII')
 
         if client_sha1 in self.clientlist:
@@ -184,31 +188,38 @@ class udpserver(object):
         if len(sign_hex) == 510:
             sign_hex = '0' + sign_hex
         remote_port_hex = '0' * (4 - len(remote_port_hex)) + remote_port_hex
-        return salt +\
-            str(required_hex) +\
-            str(remote_port_hex) +\
-            str(client_sha1) +\
-            str(sign_hex) +\
-            main_pw_enc +\
-            str(remote_ip) +\
-            str(msg[5]), self.serverlist[server].addr
+        return salt + \
+               str(required_hex) + \
+               str(remote_port_hex) + \
+               str(client_sha1) + \
+               str(sign_hex) + \
+               main_pw_enc + \
+               str(remote_ip) + \
+               str(msg[5]), self.serverlist[server].addr
 
 
 def server_keep_alive():
     global punching_servers
-    # TODO: another way to check if servers are alive:randomly send message to
-    # servers
-    pass
-
-
-def server_count():
-    global punching_servers
     while 1:
-        for server, count in punching_servers:
-            count = count - 1
-            if count == 0:
+        for server in punching_servers.keys():
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.connect(server)
+                s.close()
+            except Exception as err:
                 punching_servers.pop(server)
-        sleep(1)
+        sleep(60)
+
+
+#
+# def server_count():
+#     global punching_servers
+#     while 1:
+#         for server, count in punching_servers:
+#             count = count - 1
+#             if count == 0:
+#                 punching_servers.pop(server)
+#         sleep(1)
 
 
 def asyncserve():
@@ -218,6 +229,7 @@ def asyncserve():
 if __name__ == "__main__":
     serverlist = {}
     certs = dict()
+    ip=get_ip()
     parser = argparse.ArgumentParser()
     parser.add_argument('-c', '--config', dest="config", default='config.json')
     parser.add_argument(
@@ -241,8 +253,8 @@ if __name__ == "__main__":
             with open(client[0], "r") as f:
                 remote_cert_txt = f.read()
                 remote_cert = RSA.importKey(remote_cert_txt)
-                certs[sha1(remote_cert_txt).hexdigest()] =\
-                     [remote_cert, client[1]]
+                certs[sha1(remote_cert_txt).hexdigest()] = \
+                    [remote_cert, client[1]]
     except KeyError as e:
         logging.error(
             e.tostring() + "is not found in the config file. Quitting.")
@@ -282,9 +294,14 @@ if __name__ == "__main__":
         print (err)
         quit()
 
+    p=punching_server(24009)
     async = threading.Thread(target=asyncserve)
     async.setDaemon(True)
     async.run()
+
+    servers_alive=threading.Thread(target=server_keep_alive)
+    servers_alive.setDaemon(True)
+    servers_alive.start()
 
     dns = udpserver(certs, serverlist)
     try:

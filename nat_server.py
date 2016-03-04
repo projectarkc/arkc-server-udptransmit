@@ -1,13 +1,13 @@
 import asyncore,socket
 from time import sleep
+
 class punching_server(asyncore.dispatcher):
     #TODO: disconnect after some time
-    def __init__(self,ctl):
-        self.ctl=ctl
+    def __init__(self,port):
         self.client_matching={} # A client-server matching with client's address as key and server's address as value
         asyncore.dispatcher.__init__(self)
         self.create_socket(socket.AF_INET,socket.SOCK_STREAM)
-        self.bind(("127.0.0.1",ctl.punching_server_port))
+        self.bind(("127.0.0.1",port))
         self.listen(6)
 
     def handle_accept(self):

@@ -1,8 +1,10 @@
 from Crypto.PublicKey import RSA
 from hashlib import sha1
+from requests import get
 import dnslib
 import socket
-
+import os
+import struct
 
 class certloader:
 
@@ -48,3 +50,14 @@ def answer(dnsq, addr):
     answer.set_header_qa()
     packet = answer.pack()
     s.sendto(packet, addr)
+
+def get_ip(debug_ip=None):  # TODO: Get local network interfaces ip
+    if debug_ip:
+        ip = debug_ip
+    else:
+        try:
+            os.environ['NO_PROXY'] = 'api.ipify.org'
+            ip = get('https://api.ipify.org').text
+        except Exception as err:
+            ip = "127.0.0.1"
+    return struct.unpack("!L", socket.inet_aton(ip))[0]
