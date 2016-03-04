@@ -19,6 +19,8 @@ from common import certloader
 MAX_SALT_BUFFER = 255
 DEFAULT_REMOTE_PORT = 8000
 
+# TODO: Generic hole punching server dispatcher
+
 
 class CorruptedReq:
     pass
@@ -65,6 +67,18 @@ class udpserver(object):
                         answer = req.reply()
                         answer.add_answer(
                             dnslib.RR(req.q.qname, rdata=dnslib.TXT(punching_addr[0])))
+                        answer.add_auth(
+                            dnslib.RR(
+                                "testing.arkc.org",
+                                dnslib.QTYPE.SOA,
+                                ttl=3600,
+                                rdata=dnslib.SOA(
+                                    "104.224.151.54",  # Always return IP
+                                    "webmaster." + "freedom.arkc.org",
+                                    (20150101, 3600, 3600, 3600, 3600)
+                                )
+                            )
+                        )
                         s.sendto(answer.pack(), addr)
                         processed_msg, randserver = self.process_msg(
                             *decrypted_msg)
