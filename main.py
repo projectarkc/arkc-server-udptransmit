@@ -3,6 +3,7 @@ import socket
 import hashlib
 import binascii
 import pyotp
+import asyncore
 import argparse
 import json
 import logging
@@ -14,6 +15,9 @@ from Crypto.PublicKey import RSA
 from hashlib import sha1
 from time import sleep
 from common import certloader
+
+MAX_SALT_BUFFER = 255
+DEFAULT_REMOTE_PORT = 8000
 
 
 class CorruptedReq:
@@ -27,149 +31,184 @@ class ServerInfo:
         self.addr = addr
 
 
-def decrypt_udp_msg(msg1, msg2, msg3, msg4, msg5, msg6, req_type, addr):
-    """Return (main_pw, client_sha1, number).
+class udpserver(object):
 
-        The encrypted message should be
-        (required_connection_number (HEX, 2 bytes) +
-        used_remote_listening_port (HEX, 4 bytes) +
-        sha1(cert_pub) ,
-        pyotp.TOTP(time) , ## TODO: client identity must be checked
-        main_pw,
-        ip_in_number_form,
-        salt
-        Total length is 2 + 4 + 40 = 46, 16, 16, ?, 16
-    """
-    global recentsalt, certs, MAX_SALT_BUFFER, punching_client, punching_servers
-    assert len(msg1) == 46
-    if msg5 in recentsalt:
-        return (None, None, None, None, None)
-    number_hex, port_hex, client_sha1 = msg1[:2], msg1[2:6], msg1[6:46]
-    remote_ip = msg4.decode("ASCII") + '=' * (7 - len(msg4))
-    h = hashlib.sha256()
-    # Let's add the number_hex into the update string too, in client side and
-    # transmit side
-    h.update(
-        (certs[client_sha1][1] + msg4 + msg5 + number_hex).encode("UTF-8"))
-    assert msg2 == pyotp.TOTP(h.hexdigest()).now()
-    main_pw = binascii.unhexlify(msg3)
-    number = int(number_hex, 16)
-    remote_port = int(port_hex, 16)
-    if len(recentsalt) >= MAX_SALT_BUFFER:
-        recentsalt.pop(0)
-    recentsalt.append(msg5)
-    if msg6 == 0:
-        if (addr not in punching_client.keys()) or ((addr in punching_client.keys()) and (addr not in punching_servers.keys())):
-            punching_addr = choice(punching_servers.keys())
+    def __init__(self, certs, serverlist):
+        self.certs = certs
+        self.recentsalt = []
+        self.serverlist = self.serverlist
+        self.clientlist = {}
+        self.punching_servers = {}
+        self.punching_client = {}
+
+    def serve(self):
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.bind(('', 53))
+        while True:
+            msg, addr = s.recvfrom(2048)
+            if msg:
+                logging.info("Received request from (%s, %d)" %
+                             (addr[0], addr[1]))
+            try:
+                req = dnslib.DNSRecord.parse(msg)
+                reqdomain = str(req.q.qname)
+                decrypted_msg = self.decrypt_udp_msg(
+                    reqdomain, addr)
+                if msg[4] == 0:
+                    if addr not in self.punching_client:
+                        punching_addr = choice(self.punching_servers.keys())
+                    else:
+                        punching_addr = self.punching_client[addr]
+                    msg[3] = punching_addr[1]
+                    msg[4] = punching_addr[0]
+                    if req.q.qtype == dnslib.QTYPE.A:
+                        answer = req.reply()
+                        answer.add_answer(
+                            dnslib.RR(req.q.qname, rdata=dnslib.TXT(punching_addr[0])))
+                        s.sendto(answer.pack(), addr)
+                        processed_msg, randserver = self.process_msg(
+                            *decrypted_msg)
+                        s.sendto(processed_msg, randserver)
+                    elif req.q.qtype == dnslib.QTYPE.TXT:
+                        answer = req.reply()
+                        answer.add_answer(
+                            dnslib.RR(req.q.qname, rdata=dnslib.TXT(punching_addr[1])))
+                        s.sendto(answer.pack(), addr)
+                else:
+                    # TODO: add port into message, should not be a fixed port
+                    self.punching_servers[(addr[0], 50009)] = 60
+                    answer = req.reply()
+                    answer.header = dnslib.DNSHeader(id=req.header.id,
+                                                     aa=1, qr=1, ra=1, rcode=3)
+                    answer.add_auth(
+                        dnslib.RR(
+                            "testing.arkc.org",
+                            dnslib.QTYPE.SOA,
+                            ttl=3600,
+                            rdata=dnslib.SOA(
+                                "104.224.151.54",  # Always return IP
+                                "webmaster." + "freedom.arkc.org",
+                                (20150101, 3600, 3600, 3600, 3600)
+                            )
+                        )
+                    )
+                    answer.set_header_qa()
+                    s.sendto(answer.pack(), addr)
+                    processed_msg, randserver = self.process_msg(
+                        *decrypted_msg)
+                    s.sendto(processed_msg, randserver)
+            except CorruptedReq:
+                logging.info("Corrupted request")
+        # except AssertionError:
+        #    logging.error("authentication failed or corrupted request")
+        # except Exception as err:
+        #    logging.error("unknown error: " + str(err))
+        # TODO: use logging to show logs about success and failures
+
+    def decrypt_udp_msg(self, querydata_raw):
+        """Return (main_pw, client_sha1, number).
+
+                The encrypted message should be
+                (required_connection_number (HEX, 2 bytes) +
+                used_remote_listening_port (HEX, 4 bytes) +
+                sha1(cert_pub) ,
+                pyotp.TOTP(time),
+                main_pw,
+                ip_in_number_form,
+                salt
+                Total length is 2 + 4 + 40 = 46, 16, 16, ?, 16
+        """
+        querydata = querydata_raw.split('.')
+        if len(querydata) < 7:
+            raise CorruptedReq
+        assert len(querydata[0]) == 46
+        if querydata[4] in self.recentsalt:
+            return (None, None, None, None, None)
+        number_hex, port_hex, client_sha1 = querydata[
+            0][:2], querydata[0][2:6], querydata[0][6:46]
+        remote_ip = querydata[3].decode(
+            "ASCII") + '=' * (7 - len(querydata[3]))
+        h = hashlib.sha256()
+        h.update(
+                (self.certs[client_sha1][1] + querydata[3] + querydata[4] + number_hex).encode("UTF-8"))
+        assert querydata[1] == pyotp.TOTP(h.hexdigest()).now()
+        main_pw = binascii.unhexlify(querydata[2])
+        number = int(number_hex, 16)
+        remote_port = int(port_hex, 16)
+        if len(self.recentsalt) >= MAX_SALT_BUFFER:
+            self.recentsalt.pop(0)
+        self.recentsalt.append(querydata[4])
+        return [main_pw, client_sha1,
+                number,
+                remote_port,
+                remote_ip,
+                int(querydata[5])]
+
+    def process_msg(self, *msg):
+        main_pw, client_sha1, number, tcp_port, remote_ip = msg[
+            0], msg[1], msg[2], msg[3], msg[4]
+        salt = (''.join(choice(string.ascii_letters) for _ in range(16)))\
+            .encode('ASCII')
+
+        if client_sha1 in self.clientlist:
+            server = self.clientlist[client_sha1]
         else:
-            punching_addr = punching_client[addr]
-        if req_type == dnslib.QTYPE.A:
-            answer = req.reply()
-            answer.add_answer(dnslib.RR(req.q.qname,rdata=dnslib.TXT(punching_addr[0])))
-            packet = answer.pack()
-        elif req_type == dnslib.QTYPE.TXT:
-            answer = req.reply()
-            answer.add_answer(dnslib.RR(req.q.qname,rdata=dnslib.TXT(punching_addr[1])))
-            packet = answer.pack()
-    else:
-        punching_servers[(addr[0],50009)]=60 #TODO: add port into message, should not be a fixed port
-        answer = req.reply()
-        answer.header = dnslib.DNSHeader(id=req.header.id,
-                                         aa=1, qr=1, ra=1, rcode=3)
-        answer.add_auth(
-            dnslib.RR(
-                "testing.arkc.org",
-                dnslib.QTYPE.SOA,
-                ttl=3600,
-                rdata=dnslib.SOA(
-                    "104.224.151.54",  # Always return IP
-                    "webmaster." + "freedom.arkc.org",
-                    (20150101, 3600, 3600, 3600, 3600)
-                )
-            )
-        )
-        answer.set_header_qa()
-        packet = answer.pack()
-    if msg6>0:
-        returnvalue = [main_pw,
-                       client_sha1,
-                       number,
-                       remote_port,
-                       remote_ip,
-                       msg6]
-    else:
-        returnvalue=[main_pw,
-                       client_sha1,
-                       number,
-                       punching_addr[1],
-                       punching_addr[0],
-                       msg6]
-    return returnvalue, packet
-
-
-def process_msg(*msg):
-    global clientlist, serverlist
-    main_pw, client_sha1, number, tcp_port, remote_ip = msg[
-        0], msg[1], msg[2], msg[3], msg[4]
-    salt = (''.join(choice(string.ascii_letters) for _ in range(16)))\
-        .encode('ASCII')
-
-    if client_sha1 in clientlist:
-        server = clientlist[client_sha1]
-    else:
-        server = choice(serverlist.keys())
-        clientlist[client_sha1] = server
-    # Actually main_pw should be encrypted if you can
-    main_pw_enc = serverlist[server].pub.encrypt(
-        main_pw, None)[0]
-    required_hex = "%X" % min((number), 255)
-    unsigned_str = salt + str(number) + remote_ip + str(tcp_port)
-    sign_hex = '%X' % localpri.sign(unsigned_str.encode("UTF-8"), None)[0]
-    remote_port_hex = '%X' % tcp_port
-    if len(required_hex) == 1:
-        required_hex = '0' + required_hex
-    if len(sign_hex) == 510:
-        sign_hex = '0' + sign_hex
-    remote_port_hex = '0' * (4 - len(remote_port_hex)) + remote_port_hex
-    return salt +\
-        str(required_hex) +\
-        str(remote_port_hex) +\
-        str(client_sha1) +\
-        str(sign_hex) +\
-        main_pw_enc +\
-        str(remote_ip)+\
-        str(msg[5]), serverlist[server].addr
+            server = choice(self.serverlist.keys())
+            self.clientlist[client_sha1] = server
+        # Actually main_pw should be encrypted if you can
+        main_pw_enc = self.serverlist[server].pub.encrypt(
+            main_pw, None)[0]
+        required_hex = "%X" % min((number), 255)
+        unsigned_str = salt + str(number) + remote_ip + str(tcp_port)
+        sign_hex = '%X' % localpri.sign(unsigned_str.encode("UTF-8"), None)[0]
+        remote_port_hex = '%X' % tcp_port
+        if len(required_hex) == 1:
+            required_hex = '0' + required_hex
+        if len(sign_hex) == 510:
+            sign_hex = '0' + sign_hex
+        remote_port_hex = '0' * (4 - len(remote_port_hex)) + remote_port_hex
+        return salt +\
+            str(required_hex) +\
+            str(remote_port_hex) +\
+            str(client_sha1) +\
+            str(sign_hex) +\
+            main_pw_enc +\
+            str(remote_ip) +\
+            str(msg[5]), self.serverlist[server].addr
 
 
 def server_keep_alive():
     global punching_servers
-    #TODO: another way to check if servers are alive:randomly send message to servers
+    # TODO: another way to check if servers are alive:randomly send message to
+    # servers
     pass
+
 
 def server_count():
     global punching_servers
     while 1:
         for server, count in punching_servers:
-            count=count-1
-            if count==0:
+            count = count - 1
+            if count == 0:
                 punching_servers.pop(server)
         sleep(1)
 
 
+def asyncserve():
+    asyncore.loop(use_poll=True)
+
+
 if __name__ == "__main__":
-    MAX_SALT_BUFFER = 255
+    serverlist = {}
     certs = dict()
-    recentsalt = []
-    serverlist = {}  # TODO: be initiated, with ServerInfo class
-    clientlist = {}
-    punching_servers = {}
-    punching_client = {}
-    DEFAULT_REMOTE_PORT = 8000
     parser = argparse.ArgumentParser()
     parser.add_argument('-c', '--config', dest="config", default='config.json')
     parser.add_argument(
         "-v", dest="v", action="store_true", help="show detailed logs")
     args = parser.parse_args()
+
+    if args.v:
+        logging.basicConfig(level=logging.INFO)
 
     try:
         data_file = open(args.config)
@@ -226,31 +265,9 @@ if __name__ == "__main__":
         print (err)
         quit()
 
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.bind(('', 53))
+    async = threading.Thread(target=asyncserve)
+    async.setDaemon(True)
+    async.run()
 
-    if args.v:
-        logging.basicConfig(level=logging.INFO)
-
-    while 1:
-        msg, addr = s.recvfrom(2048)
-        if msg:
-            logging.info("Received request from (%s, %d)" % (addr[0], addr[1]))
-        try:
-            req = dnslib.DNSRecord.parse(msg)
-            reqdomain = str(req.q.qname)
-            query_data = reqdomain.split('.')
-            if len(query_data) < 7:
-                raise CorruptedReq
-            decrypted_msg, answer_packet = decrypt_udp_msg(
-                query_data[0], query_data[1], query_data[2], query_data[3], query_data[4], int(query_data[5]), req.q.qtype, addr)
-            s.sendto(answer_packet, addr)
-            processed_msg, randserver = process_msg(*decrypted_msg)
-            s.sendto(processed_msg, randserver)
-        except CorruptedReq:
-            logging.info("Corrupted request")
-        # except AssertionError:
-        #    logging.error("authentication failed or corrupted request")
-        # except Exception as err:
-        #    logging.error("unknown error: " + str(err))
-        # TODO: use logging to show logs about success and failures
+    dns = udpserver(certs, serverlist)
+    dns.serve()
