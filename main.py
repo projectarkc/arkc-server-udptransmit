@@ -13,7 +13,7 @@ from random import choice
 from Crypto.PublicKey import RSA
 from hashlib import sha1
 
-from common import certloader, answer, certstorage
+from common import certloader, answer, certstorage, int2base
 
 
 class CorruptedReq:
@@ -87,20 +87,19 @@ def process_msg(*msg):
         main_pw, None)[0]
     required_hex = "%X" % min((number), 255)
     unsigned_str = salt + str(number) + remote_ip + str(tcp_port)
-    sign_hex = '%X' % localpri.sign(unsigned_str.encode("UTF-8"), None)[0]
+    sign_hex = int2base(localpri.sign(unsigned_str.encode("UTF-8"), None)[0])
     remote_port_hex = '%X' % tcp_port
     if len(required_hex) == 1:
         required_hex = '0' + required_hex
-    if len(sign_hex) == 510:
-        sign_hex = '0' + sign_hex
     remote_port_hex = '0' * (4 - len(remote_port_hex)) + remote_port_hex
-    return salt +\
-        str(required_hex) +\
-        str(remote_port_hex) +\
-        str(client_sha1) +\
-        str(sign_hex) +\
-        main_pw_enc +\
-        str(remote_ip), serverlist[server].addr
+    return '\n'.join((salt,
+                      str(required_hex),
+                      str(remote_port_hex),
+                      str(client_sha1),
+                      str(sign_hex),
+                      main_pw_enc,
+                      str(remote_ip),
+                      str(msg[5]))), serverlist[server].addr
 
 if __name__ == "__main__":
     MAX_SALT_BUFFER = 255
