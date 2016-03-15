@@ -33,7 +33,7 @@ def decrypt_udp_msg(msg1, msg2, msg3, msg4, msg5):
         The encrypted message should be
         (required_connection_number (HEX, 2 bytes) +
         used_remote_listening_port (HEX, 4 bytes) +
-        sha1(cert_pub) ,
+        sha1(cert_pub) + version (2 bytes),
         pyotp.TOTP(time) , ## TODO: client identity must be checked
         main_pw,
         ip_in_number_form,
@@ -41,10 +41,11 @@ def decrypt_udp_msg(msg1, msg2, msg3, msg4, msg5):
         Total length is 2 + 4 + 40 = 46, 16, 16, ?, 16
     """
     global recentsalt, certs_db, MAX_SALT_BUFFER
-    assert len(msg1) == 46
+    assert len(msg1) == 48
     if msg5 in recentsalt:
         return (None, None, None, None, None)
-    number_hex, port_hex, client_sha1 = msg1[:2], msg1[2:6], msg1[6:46]
+    number_hex, port_hex, client_sha1, version = msg1[
+        :2], msg1[2:6], msg1[6:46], msg[46:48]
     cert = certs_db.query(client_sha1)
     if cert is None:
         raise CorruptedReq
@@ -65,15 +66,15 @@ def decrypt_udp_msg(msg1, msg2, msg3, msg4, msg5):
                    client_sha1,
                    number,
                    remote_port,
-                   remote_ip]
+                   remote_ip, version]
     return returnvalue
 
 
 def process_msg(*msg):
     # should send client key to the server, so the server can be easier
     global clientlist, serverlist
-    main_pw, client_sha1, number, tcp_port, remote_ip = msg[
-        0], msg[1], msg[2], msg[3], msg[4]
+    main_pw, client_sha1, number, tcp_port, remote_ip, version = msg[
+        0], msg[1], msg[2], msg[3], msg[4], msg[5]
     salt = (''.join(choice(string.ascii_letters) for _ in range(16)))\
         .encode('ASCII')
 
@@ -101,7 +102,8 @@ def process_msg(*msg):
                         str(sign_hex),
                         main_pw_enc,
                         str(remote_ip),
-                        signature_for_auth)), serverlist[server].addr
+                        signature_for_auth,
+                        version)), serverlist[server].addr
 
 if __name__ == "__main__":
     MAX_SALT_BUFFER = 255
