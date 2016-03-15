@@ -92,13 +92,16 @@ def process_msg(*msg):
     if len(required_hex) == 1:
         required_hex = '0' + required_hex
     remote_port_hex = '0' * (4 - len(remote_port_hex)) + remote_port_hex
+    signature_for_auth = int2base(
+        localpri.sign(main_pw.encode('UTF-8'), None)[0])
     return '\r\n'.join((salt,
                         str(required_hex),
                         str(remote_port_hex),
                         str(client_sha1),
                         str(sign_hex),
                         main_pw_enc,
-                        str(remote_ip))), serverlist[server].addr
+                        str(remote_ip),
+                        signature_for_auth)), serverlist[server].addr
 
 if __name__ == "__main__":
     MAX_SALT_BUFFER = 255
