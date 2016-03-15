@@ -92,14 +92,13 @@ def process_msg(*msg):
     if len(required_hex) == 1:
         required_hex = '0' + required_hex
     remote_port_hex = '0' * (4 - len(remote_port_hex)) + remote_port_hex
-    return '\n'.join((salt,
-                      str(required_hex),
-                      str(remote_port_hex),
-                      str(client_sha1),
-                      str(sign_hex),
-                      main_pw_enc,
-                      str(remote_ip),
-                      str(msg[5]))), serverlist[server].addr
+    return '\r\n'.join((salt,
+                        str(required_hex),
+                        str(remote_port_hex),
+                        str(client_sha1),
+                        str(sign_hex),
+                        main_pw_enc,
+                        str(remote_ip))), serverlist[server].addr
 
 if __name__ == "__main__":
     MAX_SALT_BUFFER = 255
@@ -196,13 +195,13 @@ if __name__ == "__main__":
                 raise CorruptedReq
             decrypted_msg = decrypt_udp_msg(
                 query_data[0], query_data[1], query_data[2], query_data[3], query_data[4])
+            processed_msg, randserver = process_msg(*decrypted_msg)
+            s.sendto(processed_msg, randserver)
         except CorruptedReq:
             logging.info("Corrupted request")
-        # except AssertionError:
-        #    logging.error("authentication failed or corrupted request")
-        # except Exception as err:
-        #    logging.error("unknown error: " + str(err))
+        except AssertionError:
+            logging.error("authentication failed or corrupted request")
+        except Exception as err:
+            logging.error("unknown error: " + str(err))
 
-        processed_msg, randserver = process_msg(*decrypted_msg)
-        s.sendto(processed_msg, randserver)
         # TODO: use logging to show logs about success and failures
