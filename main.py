@@ -12,6 +12,7 @@ import string
 from random import choice
 from Crypto.PublicKey import RSA
 from hashlib import sha1
+import requests
 
 from common import certloader, answer, certstorage, int2base
 
@@ -27,25 +28,28 @@ class ServerInfo:
         self.addr = addr
 
 
-def decrypt_udp_msg(msg1, msg2, msg3, msg4, msg5):
+def decrypt_udp_msg(msg1, msg2, msg3, msg4, msg5, msg6):
     """Return (main_pw, client_sha1, number).
 
         The encrypted message should be
+
         (required_connection_number (HEX, 2 bytes) +
         used_remote_listening_port (HEX, 4 bytes) +
-        sha1(cert_pub) + version (2 bytes),
+        sha1(cert_pub),
         pyotp.TOTP(time) , ## TODO: client identity must be checked
         main_pw,
         ip_in_number_form,
-        salt
-        Total length is 2 + 4 + 40 = 46, 16, 16, ?, 16
+        salt,
+        req_type (2) + version (2)
+
+        Total length is 2 + 4 + 40 = 46, 16, 16, ?, 16, 4
     """
     global recentsalt, certs_db, MAX_SALT_BUFFER
-    assert len(msg1) == 48
+    assert len(msg1) == 46
     if msg5 in recentsalt:
         return (None, None, None, None, None)
-    number_hex, port_hex, client_sha1, version = msg1[
-        :2], msg1[2:6], msg1[6:46], msg[46:48]
+    number_hex, port_hex, client_sha1 = msg1[
+        :2], msg1[2:6], msg1[6:46]
     cert = certs_db.query(client_sha1)
     if cert is None:
         raise CorruptedReq
@@ -62,15 +66,17 @@ def decrypt_udp_msg(msg1, msg2, msg3, msg4, msg5):
     if len(recentsalt) >= MAX_SALT_BUFFER:
         recentsalt.pop(0)
     recentsalt.append(msg5)
+    version = int(msg6[2:4], 36)
+    req_type = int(msg[:2], 36)
     returnvalue = [main_pw,
                    client_sha1,
                    number,
                    remote_port,
-                   remote_ip, version]
+                   remote_ip, version, req_type]
     return returnvalue
 
 
-def process_msg(*msg):
+def process_msg_udp(*msg):
     # should send client key to the server, so the server can be easier
     global clientlist, serverlist
     main_pw, client_sha1, number, tcp_port, remote_ip, version = msg[
@@ -104,6 +110,18 @@ def process_msg(*msg):
                         str(remote_ip),
                         signature_for_auth,
                         version)), serverlist[server].addr
+
+
+def process_msg_http(*msg):
+    # should send client key to the server, so the server can be easier
+    main_pw, client_sha1, number, tcp_port, remote_ip, version = msg[
+        0], msg[1], msg[2], msg[3], msg[4], msg[5]
+    destURL = "https://arkc-gae.appspot.com/addconn/"
+    clientURL = "http://%s:%d/" % (remote_ip, tcp_port)
+    # Actually main_pw should be encrypted if you can
+    payload = '\n'.join([client_sha1, clientURL, main_pw, number, ""])
+    return destURL, payload
+
 
 if __name__ == "__main__":
     MAX_SALT_BUFFER = 255
@@ -183,7 +201,7 @@ if __name__ == "__main__":
 
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.bind(('', 53))
-
+    httpSession = requests.Session()
     if args.v:
         logging.basicConfig(level=logging.INFO)
 
@@ -196,12 +214,17 @@ if __name__ == "__main__":
             answer(req, addr)
             reqdomain = str(req.q.qname)
             query_data = reqdomain.split('.')
-            if len(query_data) < 7:
+            if len(query_data) < 8:
                 raise CorruptedReq
             decrypted_msg = decrypt_udp_msg(
-                query_data[0], query_data[1], query_data[2], query_data[3], query_data[4])
-            processed_msg, randserver = process_msg(*decrypted_msg)
-            s.sendto(processed_msg, randserver)
+                query_data[0], query_data[1], query_data[2], query_data[3],
+                query_data[4], query_data[5])
+            if decrypted_msg[6] == 0:
+                processed_msg, randserver = process_msg_udp(*decrypted_msg)
+                s.sendto(processed_msg, randserver)
+            elif decrypted_msg[6] == 1:
+                destURL, payload = process_msg_http(*decrypted_msg)
+                httpSession.post(destURL, data=payload)
         except CorruptedReq:
             logging.info("Corrupted request")
         except AssertionError:
