@@ -13,7 +13,7 @@ from random import choice
 from Crypto.PublicKey import RSA
 from hashlib import sha1
 import requests
-
+import ipaddress
 from common import certloader, answer, certstorage, int2base
 
 
@@ -45,7 +45,7 @@ def decrypt_udp_msg(msg1, msg2, msg3, msg4, msg5, msg6):
         Total length is 2 + 4 + 40 = 46, 16, 16, ?, 16, 4
     """
     global recentsalt, certs_db, MAX_SALT_BUFFER
-    assert len(msg1) == 46
+    assert len(msg1) == 48
     if msg5 in recentsalt:
         return (None, None, None, None, None)
     number_hex, port_hex, client_sha1 = msg1[
@@ -53,13 +53,13 @@ def decrypt_udp_msg(msg1, msg2, msg3, msg4, msg5, msg6):
     cert = certs_db.query(client_sha1)
     if cert is None:
         raise CorruptedReq
-    remote_ip = msg4.decode("ASCII") + '=' * (7 - len(msg4))
+    remote_ip = str(ipaddress.ip_address(int(msg4,36)))
     h = hashlib.sha256()
     # Let's add the number_hex into the update string too, in client side and
     # transmit side
     h.update(
         (cert[1] + msg4 + msg5 + number_hex).encode("UTF-8"))
-    assert msg2 == pyotp.TOTP(h.hexdigest()).now()
+    assert msg2 == pyotp.TOTP(bytes(h.hexdigest())).now()
     main_pw = binascii.unhexlify(msg3)
     number = int(number_hex, 16)
     remote_port = int(port_hex, 16)
@@ -67,7 +67,7 @@ def decrypt_udp_msg(msg1, msg2, msg3, msg4, msg5, msg6):
         recentsalt.pop(0)
     recentsalt.append(msg5)
     version = int(msg6[2:4], 36)
-    req_type = int(msg[:2], 36)
+    req_type = int(msg6[:2], 36)
     returnvalue = [main_pw,
                    client_sha1,
                    number,
@@ -117,9 +117,9 @@ def process_msg_http(*msg):
     main_pw, client_sha1, number, tcp_port, remote_ip, version = msg[
         0], msg[1], msg[2], msg[3], msg[4], msg[5]
     destURL = "https://arkc-gae.appspot.com/addconn/"
-    clientURL = "http://%s:%d/" % (remote_ip, tcp_port)
+    clientURL = "http://%s:%d/" % (str(remote_ip), tcp_port)
     # Actually main_pw should be encrypted if you can
-    payload = '\n'.join([client_sha1, clientURL, main_pw, number, ""])
+    payload = '\n'.join([client_sha1, clientURL, main_pw, str(number), ""])
     return destURL, payload
 
 
@@ -200,7 +200,7 @@ if __name__ == "__main__":
         sys.exit()
 
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.bind(('', 53))
+    s.bind(('127.0.0.1', 53))
     httpSession = requests.Session()
     if args.v:
         logging.basicConfig(level=logging.INFO)
